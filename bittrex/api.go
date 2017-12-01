@@ -7,9 +7,20 @@ import (
 	"io/ioutil"
 )
 
+const (
+	// BaseHost will be used by default
+	BaseHost = "https://bittrex.com/api/v1.1"
+	// GetMarketsEndpoint is public endpoint to get open markets
+	GetMarketsEndpoint = "/public/getmarkets"
+	// GetCurrenciesEndpoint is a public endpoint to get traded currencies
+	GetCurrenciesEndpoint = "/public/getcurrencies"
+	// GetTickerEndpoint is a public endpoint to get tickers
+	GetTickerEndpoint = "/public/getticker"
+)
+
 // GetMarkets ...
 func (e *Exchange) GetMarkets() ([]*Market, error) {
-	resp, err := e.client.Get(e.host + GetMarketsEndpoint)
+	resp, err := e.client.Get(e.cnf.Host + GetMarketsEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +44,7 @@ func (e *Exchange) GetMarkets() ([]*Market, error) {
 
 // GetCurrencies ...
 func (e *Exchange) GetCurrencies() ([]*Currency, error) {
-	resp, err := e.client.Get(e.host + GetCurrenciesEndpoint)
+	resp, err := e.client.Get(e.cnf.Host + GetCurrenciesEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +68,7 @@ func (e *Exchange) GetCurrencies() ([]*Currency, error) {
 
 // GetTicker ...
 func (e *Exchange) GetTicker(market string) (*Ticker, error) {
-	resp, err := e.client.Get(fmt.Sprintf("%s?market=%s", e.host+GetTickerEndpoint, market))
+	resp, err := e.client.Get(fmt.Sprintf("%s?market=%s", e.cnf.Host+GetTickerEndpoint, market))
 	if err != nil {
 		return nil, err
 	}

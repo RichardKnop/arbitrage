@@ -3,6 +3,7 @@ package bittrex
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -15,41 +16,33 @@ import (
 const (
 	// Name is a unique exchange name
 	Name = "bittrex"
-	// BaseHost will be used by default
-	BaseHost = "https://bittrex.com/api/v1.1"
-	// GetMarketsEndpoint is public endpoint to get open markets
-	GetMarketsEndpoint = "/public/getmarkets"
-	// GetCurrenciesEndpoint is a public endpoint to get traded currencies
-	GetCurrenciesEndpoint = "/public/getcurrencies"
-	// GetTickerEndpoint is a public endpoint to get tickers
-	GetTickerEndpoint = "/public/getticker"
 )
 
 var (
 	// ErrEmptyResult is returned on edge case when response's success flag is true but result is null for some reason
 	ErrEmptyResult = errors.New("Empty result")
-	// GetTickerInterval spaces out ticker requests a bit so we don't DDOS the exchange
-	GetTickerInterval = 10 * time.Millisecond
-	// RefreshInterval specifies how often we want to get updated tickers from the exchange
-	RefreshInterval = 10 * time.Second
 )
 
 // Exchange wraps methods that interact with exchange
 type Exchange struct {
-	host   string
-	client *http.Client
-	quit   chan int
-	wg     *sync.WaitGroup
+	cnf        *Config
+	client     *http.Client
+	quit       chan int
+	wg         *sync.WaitGroup
+	batch      []string
+	batchCount int
 }
 
 // New returns new instance of Exchange
-func New(host string) *Exchange {
-	if host == "" {
-		host = BaseHost
-	}
+func New(cnf *Config) *Exchange {
 	return &Exchange{
-		host:   host,
-		client: new(http.Client),
+		cnf: cnf,
+		client: &http.Client{
+			Timeout: time.Duration(2 * time.Second), // set timeout to reasonably low period
+		},
+		quit:  make(chan int),
+		wg:    new(sync.WaitGroup),
+		batch: make([]string, cnf.BatchSize),
 	}
 }
 
@@ -60,36 +53,19 @@ func (e *Exchange) GetName() string {
 
 // Run ...
 func (e *Exchange) Run(tickers chan *types.Ticker) error {
-	e.quit = make(chan int)
-	e.wg = new(sync.WaitGroup)
+	errChan := make(chan error)
 
-	for {
-		markets, err := e.GetMarkets()
-		if err != nil {
-			log.Printf("[%s] Get markets error: %v", e.GetName(), err)
-			continue
-		}
+	go func() {
+		errChan <- e.getTickersInBatches(tickers)
+	}()
 
-		select {
-		case <-e.quit:
-			return nil
-		default:
-			for _, m := range markets {
-				e.wg.Add(1)
-				go e.getTicker(m.MarketName, tickers)
-
-				<-time.After(GetTickerInterval)
-			}
-
-			<-time.After(RefreshInterval)
-		}
-	}
+	return <-errChan
 }
 
 // Quit ...
 func (e *Exchange) Quit() error {
 	log.Printf("[%s] Quitting the running goroutine", e.GetName())
-	e.quit <- 0
+	e.quit <- 1
 
 	log.Printf("[%s] Wait for ticker goroutines to finish", e.GetName())
 	e.wg.Wait()
@@ -97,15 +73,62 @@ func (e *Exchange) Quit() error {
 	return nil
 }
 
-func (e *Exchange) getTicker(market string, tickers chan *types.Ticker) error {
-	defer e.wg.Done()
+func (e *Exchange) getTickersInBatches(tickers chan *types.Ticker) error {
+	for {
+		// Get all available markets
+		markets, err := e.GetMarkets()
+		if err != nil {
+			return fmt.Errorf("[%s] Get markets error: %v", e.GetName(), err)
+		}
 
-	ticker, err := e.GetTicker(market)
-	if err != nil {
-		log.Printf("[%s] Get ticker error: %v", e.GetName(), err)
-		return err
+		for i, m := range markets {
+			// Capture quit channel here so we can exit the loop
+			select {
+			case <-e.quit:
+				return nil
+			default:
+			}
+
+			// Add the market to batch slice
+			e.batch[e.batchCount] = m.MarketName
+			e.batchCount++
+
+			// If we have filled the batch slice or this is the last iteration in the loop
+			if e.batchCount == e.cnf.BatchSize-1 || i == len(markets)-1 {
+				// Execute batch of ticker requests
+				for _, marketName := range e.batch {
+					e.wg.Add(1)
+					go e.getTicker(marketName, tickers)
+				}
+
+				// Reset the batch
+				e.batchCount = 0
+				e.batch = make([]string, e.cnf.BatchSize)
+
+				// Space out batch requests
+				<-time.After(e.cnf.BatchInterval)
+			}
+		}
 	}
 
+	return nil
+}
+
+func (e *Exchange) getTicker(marketName string, tickers chan *types.Ticker) error {
+	defer e.wg.Done()
+
+	// If the market name is empty string, ignore
+	if marketName == "" {
+		return nil
+	}
+
+	// Get the ticker for this market name
+	ticker, err := e.GetTicker(marketName)
+	if err != nil {
+		return fmt.Errorf("[%s] Get ticker for '%s' error: %v", e.GetName(), marketName, err)
+	}
+
+	// Push the ticker to the upstream channel
 	tickers <- &types.Ticker{
 		Bid:  decimal.NewFromFloat(ticker.Bid),
 		Ask:  decimal.NewFromFloat(ticker.Ask),

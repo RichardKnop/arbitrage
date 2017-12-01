@@ -42,7 +42,7 @@ func (b *Bot) Run() error {
 
 // Quit ...
 func (b *Bot) Quit() error {
-	b.quit <- 0
+	b.quit <- 1
 
 	for _, e := range b.Exchanges {
 		if err := e.Quit(); err != nil {
