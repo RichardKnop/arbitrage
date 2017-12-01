@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -35,14 +36,24 @@ type Exchange struct {
 
 // New returns new instance of Exchange
 func New(cnf *Config) *Exchange {
-	return &Exchange{
-		cnf: cnf,
-		client: &http.Client{
-			Timeout: time.Duration(2 * time.Second), // set timeout to reasonably low period
+	secs := time.Duration(3) // set timeouts to reasonably low period
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			Dial: (&net.Dialer{
+				Timeout:   secs * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout: secs * time.Second,
 		},
-		quit:  make(chan int),
-		wg:    new(sync.WaitGroup),
-		batch: make([]string, cnf.BatchSize),
+	}
+
+	return &Exchange{
+		cnf:    cnf,
+		client: client,
+		quit:   make(chan int),
+		wg:     new(sync.WaitGroup),
+		batch:  make([]string, cnf.BatchSize),
 	}
 }
 
@@ -64,7 +75,7 @@ func (e *Exchange) Run(tickers chan *types.Ticker) error {
 
 // Quit ...
 func (e *Exchange) Quit() error {
-	log.Printf("[%s] Quitting the running goroutine", e.GetName())
+	log.Printf("[%s] Quitting the ticker loop", e.GetName())
 	e.quit <- 1
 
 	log.Printf("[%s] Wait for ticker goroutines to finish", e.GetName())
@@ -82,6 +93,7 @@ func (e *Exchange) getTickersInBatches(tickers chan *types.Ticker) error {
 		}
 
 		for i, m := range markets {
+
 			// Capture quit channel here so we can exit the loop
 			select {
 			case <-e.quit:
@@ -97,8 +109,13 @@ func (e *Exchange) getTickersInBatches(tickers chan *types.Ticker) error {
 			if e.batchCount == e.cnf.BatchSize-1 || i == len(markets)-1 {
 				// Execute batch of ticker requests
 				for _, marketName := range e.batch {
+					go func(name string) {
+						if err := e.getTicker(name, tickers); err != nil {
+							log.Print(err)
+						}
+					}(marketName)
+
 					e.wg.Add(1)
-					go e.getTicker(marketName, tickers)
 				}
 
 				// Reset the batch
@@ -125,7 +142,7 @@ func (e *Exchange) getTicker(marketName string, tickers chan *types.Ticker) erro
 	// Get the ticker for this market name
 	ticker, err := e.GetTicker(marketName)
 	if err != nil {
-		return fmt.Errorf("[%s] Get ticker for '%s' error: %v", e.GetName(), marketName, err)
+		return fmt.Errorf("[%s] Get ticker for '%s' error: %v\n", e.GetName(), marketName, err)
 	}
 
 	// Push the ticker to the upstream channel

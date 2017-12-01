@@ -11,11 +11,9 @@ import (
 )
 
 func main() {
-	quit := make(chan int)
-
 	// Run the bot
 	b := bot.New(bittrex.New(&bittrex.Config{
-		Host:          "",
+		Host:          bittrex.APIHost,
 		BatchSize:     bittrex.DefaultBatchSize,
 		BatchInterval: bittrex.DefaultBatchInterval,
 	}))
@@ -31,13 +29,11 @@ func main() {
 			case s := <-sig:
 				log.Printf("Signal received: %v", s)
 				b.Quit()
-				quit <- 1
-				return
 			}
 		}
 	}()
 
-	b.Run()
-
-	<-quit
+	if err := b.Run(); err != nil {
+		log.Fatal(err)
+	}
 }

@@ -8,7 +8,7 @@ const (
 	// DefaultBatchSize ...
 	DefaultBatchSize = 5
 	// DefaultBatchInterval ...
-	DefaultBatchInterval = 500 * time.Millisecond
+	DefaultBatchInterval = 250 * time.Millisecond
 )
 
 // Config stores Bittrex configuration options
